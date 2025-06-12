@@ -1,7 +1,9 @@
-from Tweet_Processing import *
 
 import os
 #os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../Deep_Learning_NLP")))
+from Tweet_Preprocessing import *
 
 import numpy as np
 import pandas as pd
@@ -37,7 +39,7 @@ if __name__ == '__main__':
                     'extract_and_remove_hashtags_from_text',
                     'remove_urls_from_text',
                     'remove_special_characters_from_text',
-                    'correct_spelling_in_text',  
+                    'remove_spelling_errors_from_text',  
                     'lemmatize_text',
                     'remove_punctuations_from_text',
                     'remove_unknown_words_from_text',

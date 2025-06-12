@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.model_selection import ShuffleSplit
 from sklearn.model_selection import cross_val_score
-from statsmodels.tsa.seasonal import seasonal_decompose
+
 from dateutil.parser import parse
 import multiprocessing
 import pathlib
@@ -61,17 +61,21 @@ def Tweetproc_Get_Wordnet_Pos(words):
 class TweetPreprocessor:
     # constructor: initialize with a single tweet text
     def __init__(self, tweet, index=0, special_words=[], special_chars=[],
-                 replace_dict=None, spell_check_limit=3):
+                 replace_dict=None, spell_check_limit=3, short_word_limit=1):
         self.original_text = tweet
         self.preprocessed_text = tweet
         self.index = index
         self.tokens = []
+        self.tokens_count = 0
         self.token_updated = False
         self.hashtags = ""
         self.special_words = special_words
         self.special_chars = special_chars
         self.replace_dict = replace_dict
         self.spell_check_limit = spell_check_limit
+        self.spell_error_count = 0
+        self.spell_error_words = []
+        self.short_word_limit = short_word_limit
         self.unknown_words = []
         self.is_retweet = False
 
@@ -130,11 +134,23 @@ class TweetPreprocessor:
             self.preprocessed_text = self.preprocessed_text.replace(char, ' ')
         self.token_updated = False
 
+    def remove_short_words_from_text(self):
+        if not self.token_updated:
+            self.tokens = word_tokenize(self.preprocessed_text)
+
+        self.tokens = [word for word in self.tokens if len(word) > self.short_word_limit]
+        self.preprocessed_text = ' '.join(self.tokens)
+        self.token_updated = True
+
     def correct_spelling_in_text(self):
-        self.tokens = word_tokenize(self.preprocessed_text)
+        if not self.token_updated:
+            self.tokens = word_tokenize(self.preprocessed_text)
         corrected_tokens = []
         for word in self.tokens:
             if TWEETPROC_SPELL_CHECKER.unknown([word]) and (word not in self.special_words):  # specific words are skipped
+                # store the work with spelling error
+                self.spell_error_count += 1
+                self.spell_error_words.append(word)
                 # Get the most probable correction
                 correction_candidates = TWEETPROC_SPELL_CHECKER.candidates(word)
                 if correction_candidates and len(correction_candidates) <= self.spell_check_limit:   # too many candidates shall be ignored
@@ -149,6 +165,21 @@ class TweetPreprocessor:
         self.tokens = corrected_tokens
         self.preprocessed_text = ' '.join(corrected_tokens)
         
+    def remove_spelling_errors_from_text(self):
+        if not self.token_updated:
+            self.tokens = word_tokenize(self.preprocessed_text)
+        corrected_tokens = []
+        for word in self.tokens:
+            if TWEETPROC_SPELL_CHECKER.unknown([word]) and (word not in self.special_words):  # specific words are skipped
+                # store the work with spelling error
+                self.spell_error_count += 1
+                self.spell_error_words.append(word)
+            else:
+                # keep only correctly spelled words
+                corrected_tokens.append(word)
+        self.token_updated = True
+        self.tokens = corrected_tokens
+        self.preprocessed_text = ' '.join(corrected_tokens)
     
     def remove_unknown_words_from_text(self):
         if not self.token_updated:
@@ -189,7 +220,9 @@ class TweetPreprocessor:
         if not self.token_updated:
             # Tokenize the final preprocessed text
             self.tokens = word_tokenize(self.preprocessed_text)
-        if verbose >= 1:
+
+        self.tokens_count = len(self.tokens)
+        if verbose >= 2:
             print(f"processing finished for tweet {self.index}")
         return self.preprocessed_text
     
@@ -231,6 +264,7 @@ class TweetPreprocessorFactory:
     
     def batch_process_tweets(self, index_range, verbose=0):
         tweets_processed = []
+        start_index = index_range[0]
         print(f"Starting processing of tweets from index {index_range[0]} to {index_range[1]} using {self.n_jobs} jobs.")
         for i in range(index_range[0], index_range[1]):
             tweet_text = self.tweets_dataframe.iloc[i][self.col_name_orig_text]
@@ -240,6 +274,8 @@ class TweetPreprocessorFactory:
                                              special_chars=self.special_chars)
             preprocessor.process_text(self.func_list, verbose=verbose)
             tweets_processed.append(preprocessor)
+            if (verbose >= 1) and ((i - start_index + 1) % 2000 == 0):
+                print(f"processing of tweets from index {index_range[0]} to {index_range[1]} finished {i - start_index + 1} laps.")
         
         print(f"FINISHED PROCESSING of tweets from index {index_range[0]} to {index_range[1]}")
         
@@ -258,6 +294,10 @@ class TweetPreprocessorFactory:
             self.tweets_dataframe.at[tweet.index, 'processed_text'] = tweet.preprocessed_text
             self.tweets_dataframe.at[tweet.index, 'hashtags'] = tweet.hashtags
             self.tweets_dataframe.at[tweet.index, 'is_retweet'] = tweet.is_retweet
+            self.tweets_dataframe.at[tweet.index, 'tokens_count'] = tweet.tokens_count
+            self.tweets_dataframe.at[tweet.index, 'spell_error_count'] = tweet.spell_error_count
+            self.tweets_dataframe.at[tweet.index, 'spell_error_words'] = ', '.join(tweet.spell_error_words)
+            self.tweets_dataframe.at[tweet.index, 'unknown_words'] = ', '.join(tweet.unknown_words)
         return self.tweets_dataframe
     
     def save_processed_tweets(self, output_filename):
